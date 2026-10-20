@@ -6164,7 +6164,7 @@ body {
           <div class="readonly-note">
             <svg aria-hidden="true"><use href="#icon-info"></use></svg>
             <p>
-              百度地图仅用于地址和定位，不参与评分。综合分按美团 50% + 大众点评 50% 计算；连锁店仅显示两个校区半径圈内的分店，平台评分缺失时显示“待平台核验”。
+              百度地图仅用于地址和定位，不参与评分。暂无用户评分时取美团与大众点评已核验评分的平均值；有用户评分时按 0.2×美团 + 0.2×大众点评 + 0.6×用户评分计算。
             </p>
           </div>
 
@@ -7841,10 +7841,19 @@ window.NJU_CLOUD_CONFIG = {
     const meituan = toFiniteNumber(place.meituanRating);
     const dianping = toFiniteNumber(place.dianpingRating);
     const user = toFiniteNumber(place.userRating);
-    if (meituan === null || dianping === null) return null;
-    return user === null
-      ? 0.5 * meituan + 0.5 * dianping
-      : 0.2 * meituan + 0.2 * dianping + 0.6 * user;
+    const platformRatings = [meituan, dianping].filter(
+      (rating) => rating !== null,
+    );
+    if (user !== null && meituan !== null && dianping !== null) {
+      return 0.2 * meituan + 0.2 * dianping + 0.6 * user;
+    }
+    if (user === null && platformRatings.length) {
+      return (
+        platformRatings.reduce((sum, rating) => sum + rating, 0) /
+        platformRatings.length
+      );
+    }
+    return null;
   }
 
   function normalizePlace(place) {
@@ -8206,7 +8215,7 @@ window.NJU_CLOUD_CONFIG = {
           ? "仙林 3km 检索补充"
           : place.recommended ? "红榜推荐" : "南京美食整理";
     const platformPolicy = place.userRating === null
-      ? "当前没有用户评分，综合分按 0.5×美团 + 0.5×大众点评计算。"
+      ? "当前没有用户评分，综合分按美团与大众点评已核验评分的平均数计算。"
       : "当前存在用户评分，综合分按 0.2×美团 + 0.2×大众点评 + 0.6×用户评分计算。";
     const userRatingLabel = place.userRating === null
       ? "暂无评价"
@@ -8215,8 +8224,10 @@ window.NJU_CLOUD_CONFIG = {
       ? `${place.userReviewCount} 人评价 · 60% 权重`
       : "登录后可发布第一条评价";
     const platformState = place.rating === null
-      ? "尚未同时核验到美团与大众点评评分，因此暂不生成综合分。"
-      : "美团与大众点评评分均已核验，综合分已按既定权重计算。";
+      ? "尚未取得可靠的美团或大众点评评分，因此暂不生成综合分。"
+      : place.userRating === null
+        ? "当前按美团与大众点评已核验评分的平均值计算。"
+        : "美团与大众点评评分均已核验，综合分已按既定权重计算。";
     const detailUrl = place.detailUrl || `https://map.baidu.com/search/${encodeURIComponent(`${place.name} 南京`)}/`;
 
     els.detailContent.innerHTML = `
