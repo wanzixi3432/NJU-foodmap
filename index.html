@@ -5511,6 +5511,24 @@ body {
   line-height: 1.6;
 }
 
+.community-resend-confirmation {
+  justify-self: start;
+  margin-top: -4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #a94730;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.community-resend-confirmation[hidden] {
+  display: none;
+}
+
 .community-account-panel {
   display: grid;
   gap: 5px;
@@ -8444,6 +8462,8 @@ window.NJU_CLOUD_CONFIG = {
     authMode: "login",
     authMessage: "",
     authMessageError: false,
+    needsConfirmation: false,
+    lastAuthEmail: "",
     cloudChecking: false,
     cloudIssue: "",
     busy: false,
@@ -8479,7 +8499,13 @@ window.NJU_CLOUD_CONFIG = {
       }
       await rawRequest("/rest/v1/food_reviews?select=id&limit=1");
     } catch (error) {
-      state.cloudIssue = `云端连接检查失败：${error.message || "请稍后重试"}`;
+      const message = error.message || "";
+      state.cloudIssue =
+        /failed to fetch|networkerror|load failed|network request failed/i.test(
+          message,
+        )
+          ? "无法连接 Supabase。请换用手机 Safari 或 Chrome 打开，并点击“重新检测云端”；如果仍然失败，说明当前网络或应用内置浏览器拦截了 supabase.co 域名。"
+          : `云端连接检查失败：${message || "请稍后重试"}`;
     } finally {
       state.cloudChecking = false;
       renderAuthState();
@@ -8776,6 +8802,12 @@ window.NJU_CLOUD_CONFIG = {
             <input name="password" type="password" minlength="6" autocomplete="current-password" required placeholder="至少 6 位" />
           </label>
           <p class="community-auth-message" id="communityAuthMessage" aria-live="polite"></p>
+          <button class="community-resend-confirmation" id="communityCloudRetry" type="button" hidden>
+            重新检测云端
+          </button>
+          <button class="community-resend-confirmation" id="communityResendConfirmation" type="button" hidden>
+            重新发送验证邮件
+          </button>
           <button class="community-primary-button" id="communityAuthSubmit" type="submit">登录</button>
         </form>
         <div class="community-account-panel" id="communityAccountPanel" hidden>
@@ -8795,6 +8827,7 @@ window.NJU_CLOUD_CONFIG = {
     state.authMode = mode;
     state.authMessage = "";
     state.authMessageError = false;
+    state.needsConfirmation = false;
     authModal.hidden = false;
     authModal.classList.add("is-open");
     document.body.classList.add("community-modal-open");
@@ -8817,6 +8850,7 @@ window.NJU_CLOUD_CONFIG = {
     state.authMode = mode === "register" ? "register" : "login";
     state.authMessage = "";
     state.authMessageError = false;
+    state.needsConfirmation = false;
     renderAuthModal();
   }
 
@@ -8829,6 +8863,8 @@ window.NJU_CLOUD_CONFIG = {
     const intro = authModal.querySelector(".community-auth-intro");
     const submit = authModal.querySelector("#communityAuthSubmit");
     const message = authModal.querySelector("#communityAuthMessage");
+    const cloudRetry = authModal.querySelector("#communityCloudRetry");
+    const resend = authModal.querySelector("#communityResendConfirmation");
     const nameField = authModal.querySelector("#communityNameField");
     const password = form.elements.password;
 
@@ -8849,6 +8885,11 @@ window.NJU_CLOUD_CONFIG = {
       "is-error",
       !isConfigured() || Boolean(state.cloudIssue) || state.authMessageError,
     );
+    cloudRetry.hidden = !state.cloudIssue;
+    cloudRetry.disabled = state.busy || state.cloudChecking;
+    resend.hidden = !state.needsConfirmation;
+    resend.disabled =
+      !isConfigured() || Boolean(state.cloudIssue) || state.busy;
     submit.disabled =
       !isConfigured() || Boolean(state.cloudIssue) || state.busy;
     form.querySelectorAll("input").forEach((input) => {
@@ -8908,8 +8949,10 @@ window.NJU_CLOUD_CONFIG = {
         if (!result.active) {
           state.authMode = "login";
           state.authMessage =
-            "注册成功。请先打开验证邮件完成验证，然后再回来登录。";
+            `注册成功。请打开发送到 ${email} 的验证邮件并点击确认链接，然后再回来登录。`;
           state.authMessageError = false;
+          state.needsConfirmation = true;
+          state.lastAuthEmail = email;
           renderAuthModal();
           return;
         }
@@ -8920,7 +8963,15 @@ window.NJU_CLOUD_CONFIG = {
       showToast("登录成功，正在同步食客评价");
       await loadReviews();
     } catch (error) {
-      state.authMessage = error.message || "操作失败，请稍后重试。";
+      const rawMessage = error.message || "操作失败，请稍后重试。";
+      if (/email not confirmed/i.test(rawMessage)) {
+        state.authMessage =
+          `邮箱 ${email} 尚未验证。请打开确认邮件并点击验证链接，或重新发送验证邮件。`;
+        state.needsConfirmation = true;
+        state.lastAuthEmail = email;
+      } else {
+        state.authMessage = rawMessage;
+      }
       state.authMessageError = true;
     } finally {
       state.busy = false;
@@ -8934,6 +8985,36 @@ window.NJU_CLOUD_CONFIG = {
         review.placeId === state.activePlaceId &&
         review.userId === state.user?.id,
     );
+  }
+
+  async function resendConfirmation() {
+    if (state.busy || !state.lastAuthEmail || !isConfigured()) return;
+    state.busy = true;
+    state.authMessage = "正在重新发送验证邮件…";
+    state.authMessageError = false;
+    renderAuthModal();
+    try {
+      await rawRequest("/auth/v1/resend", {
+        method: "POST",
+        body: {
+          type: "signup",
+          email: state.lastAuthEmail,
+        },
+      });
+      state.authMessage =
+        "验证邮件已重新发送。请检查收件箱和垃圾邮件文件夹。";
+    } catch (error) {
+      state.authMessage = error.message || "验证邮件发送失败，请稍后重试。";
+      state.authMessageError = true;
+    } finally {
+      state.busy = false;
+      renderAuthModal();
+    }
+  }
+
+  async function retryCloudConnection() {
+    if (state.busy || state.cloudChecking) return;
+    await checkCloudHealth();
   }
 
   function placeReviews(placeId) {
@@ -9366,6 +9447,12 @@ window.NJU_CLOUD_CONFIG = {
     authModal
       ?.querySelector("#communitySignOut")
       ?.addEventListener("click", signOut);
+    authModal
+      ?.querySelector("#communityResendConfirmation")
+      ?.addEventListener("click", resendConfirmation);
+    authModal
+      ?.querySelector("#communityCloudRetry")
+      ?.addEventListener("click", retryCloudConnection);
     document.addEventListener("click", handleDocumentClick);
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && authModal && !authModal.hidden) {
